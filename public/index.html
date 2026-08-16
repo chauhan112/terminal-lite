@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-zinc-950 text-zinc-100">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>CloudShell Terminal</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- xterm.js (embedded, served by the Go binary) -->
+  <link rel="stylesheet" href="/vendor/xterm.min.css" />
+  <script src="/vendor/xterm.min.js"></script>
+  <script src="/vendor/addon-fit.min.js"></script>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
+
+  <style>
+    body { font-family: 'JetBrains Mono', monospace; touch-action: manipulation; }
+    .xterm-viewport::-webkit-scrollbar { width: 6px; }
+    .xterm-viewport::-webkit-scrollbar-track { background: #09090b; }
+    .xterm-viewport::-webkit-scrollbar-thumb { background: #27272a; border-radius: 3px; }
+    .xterm-viewport::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+    .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+  </style>
+</head>
+<body class="h-[100dvh] w-full flex flex-col overflow-hidden bg-zinc-950 select-none">
+
+  <!-- ================= TOP HEADER & TABS BAR ================= -->
+  <header class="flex-none bg-zinc-900 border-b border-zinc-800/80 px-2 sm:px-3 pt-2 flex flex-col gap-1">
+
+    <!-- Top Meta Row -->
+    <div class="flex items-center justify-between pb-1 text-xs">
+      <div class="flex items-center gap-2">
+        <div id="status-badge" class="flex items-center gap-1.5 px-2 py-0.5 rounded bg-amber-950/60 border border-amber-500/30 text-amber-400">
+          <span id="status-dot" class="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+          <span id="status-text" class="font-semibold tracking-wider text-[10px]">CONNECTING</span>
+        </div>
+        <span id="host-label" class="text-zinc-400 hidden sm:inline"></span>
+        <span class="text-zinc-600 hidden sm:inline">•</span>
+        <span id="proto-label" class="text-zinc-500 text-[11px] hidden md:inline"></span>
+      </div>
+
+      <!-- Controls -->
+      <div class="flex items-center gap-2">
+        <button id="clear-btn" class="px-2 py-1 bg-zinc-800/60 hover:bg-zinc-700 rounded text-zinc-300 transition text-[11px]">Clear</button>
+        <button id="reconnect-btn" class="px-2 py-1 bg-zinc-800/60 hover:bg-zinc-700 rounded text-zinc-300 transition text-[11px]">⚡ Restart</button>
+      </div>
+    </div>
+
+    <!-- Tabs Row -->
+    <div class="flex items-center gap-1 overflow-x-auto no-scrollbar pt-1">
+      <div id="tabbar" class="flex items-center gap-1 overflow-x-auto no-scrollbar"></div>
+      <button id="newtab-btn" class="px-2.5 py-1 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60 rounded text-sm transition">+</button>
+    </div>
+  </header>
+
+  <!-- ================= MAIN TERMINAL AREA ================= -->
+  <main class="flex-1 w-full bg-zinc-950 p-2 sm:p-3 overflow-hidden relative">
+    <div id="terminal-container" class="w-full h-full relative"></div>
+  </main>
+
+  <!-- ================= MOBILE / QUICK KEYS TOOLBAR ================= -->
+  <div class="flex-none bg-zinc-900 border-t border-zinc-800/80 px-2 py-1.5 flex items-center justify-between gap-1 overflow-x-auto text-xs select-none"
+       style="padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px));">
+    <div class="flex items-center gap-1.5">
+      <button data-key="esc" class="key-btn px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 rounded text-zinc-300 font-bold">ESC</button>
+      <button data-key="tab" class="key-btn px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 rounded text-zinc-300 font-bold">TAB</button>
+      <button data-key="ctrlc" class="key-btn px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 rounded text-amber-400 font-bold">CTRL+C</button>
+      <button data-key="ctrld" class="key-btn px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 rounded text-amber-400 font-bold">CTRL+D</button>
+      <button data-key="|" class="key-btn px-2.5 py-1 bg-zinc-800/60 hover:bg-zinc-700 rounded text-zinc-400">|</button>
+      <button data-key="~" class="key-btn px-2.5 py-1 bg-zinc-800/60 hover:bg-zinc-700 rounded text-zinc-400">~</button>
+      <button data-key="/" class="key-btn px-2.5 py-1 bg-zinc-800/60 hover:bg-zinc-700 rounded text-zinc-400">/</button>
+      <button data-key="-" class="key-btn px-2.5 py-1 bg-zinc-800/60 hover:bg-zinc-700 rounded text-zinc-400">-</button>
+    </div>
+
+    <!-- Arrow Navigation -->
+    <div class="flex items-center gap-1">
+      <button data-key="up" class="key-btn px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 rounded text-zinc-300">↑</button>
+      <button data-key="down" class="key-btn px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 rounded text-zinc-300">↓</button>
+      <button data-key="left" class="key-btn px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 rounded text-zinc-300">←</button>
+      <button data-key="right" class="key-btn px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 rounded text-zinc-300">→</button>
+    </div>
+  </div>
+
+  <!-- ================= ENGINE ================= -->
+  <script>
+    const params = new URLSearchParams(location.search);
+    const token = params.get('token') || '';
+    const wsBase = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws' +
+                   (token ? '?token=' + encodeURIComponent(token) : '');
+
+    document.getElementById('host-label').textContent = location.hostname || 'localhost';
+    document.getElementById('proto-label').textContent = location.host + (location.protocol === 'https:' ? ' (TLS)' : '');
+
+    const termTheme = {
+      background: '#09090b', foreground: '#f4f4f5', cursor: '#10b981', cursorAccent: '#09090b',
+      selectionBackground: '#3f3f46',
+      black: '#18181b', red: '#ef4444', green: '#10b981', yellow: '#f59e0b', blue: '#3b82f6',
+      magenta: '#d946ef', cyan: '#06b6d4', white: '#f4f4f5',
+      brightBlack: '#71717a', brightRed: '#f87171', brightGreen: '#34d399', brightYellow: '#fbbf24',
+      brightBlue: '#60a5fa', brightMagenta: '#e879f9', brightCyan: '#22d3ee', brightWhite: '#ffffff'
+    };
+
+    let tabs = [];
+    let activeId = null;
+    let tabSeq = 0;
+
+    const tabEl = (t) => document.getElementById('tab-' + t.id);
+    const activeTab = () => tabs.find(t => t.id === activeId);
+
+    function setStatus(tab) {
+      if (tab.id !== activeId) return;
+      const badge = document.getElementById('status-badge');
+      const dot = document.getElementById('status-dot');
+      const text = document.getElementById('status-text');
+      const styles = {
+        connected: ['bg-emerald-950/60', 'border-emerald-500/30', 'text-emerald-400', 'bg-emerald-500', 'CONNECTED'],
+        connecting: ['bg-amber-950/60', 'border-amber-500/30', 'text-amber-400', 'bg-amber-500', 'CONNECTING'],
+        disconnected: ['bg-red-950/60', 'border-red-500/30', 'text-red-400', 'bg-red-500', 'DISCONNECTED']
+      };
+      const s = styles[tab.status] || styles.disconnected;
+      badge.className = 'flex items-center gap-1.5 px-2 py-0.5 rounded border ' + s[0] + ' ' + s[1] + ' ' + s[2];
+      dot.className = 'w-2 h-2 rounded-full animate-pulse ' + s[3];
+      text.textContent = s[4];
+    }
+
+    function renderTabBar() {
+      const bar = document.getElementById('tabbar');
+      bar.innerHTML = '';
+      for (const t of tabs) {
+        const el = document.createElement('div');
+        const isActive = t.id === activeId;
+        el.id = 'tab-' + t.id;
+        el.className = 'group flex items-center gap-2 px-3 py-1.5 rounded-t text-xs cursor-pointer transition border-t border-x ' +
+          (isActive
+            ? 'bg-zinc-950 border-zinc-700/80 text-zinc-100'
+            : 'bg-zinc-900 border-transparent hover:bg-zinc-800/50 text-zinc-400 hover:text-zinc-200');
+        el.innerHTML = '<span class="' + (isActive ? 'text-emerald-400' : 'text-zinc-600') + '">❯</span>' +
+                       '<span class="font-medium">' + t.id + ': ' + t.title + '</span>' +
+                       '<span data-close="1" class="text-zinc-600 hover:text-zinc-300 ml-1 text-xs">&times;</span>';
+        el.addEventListener('click', (e) => {
+          if (e.target.dataset.close) closeTab(t.id);
+          else activateTab(t.id);
+        });
+        bar.appendChild(el);
+      }
+    }
+
+    function activateTab(id) {
+      const t = tabs.find(x => x.id === id);
+      if (!t) return;
+      activeId = id;
+      for (const x of tabs) x.container.classList.toggle('hidden', x.id !== id);
+      renderTabBar();
+      setStatus(t);
+      t.fit.fit();
+      if (t.status === 'connected') t.term.focus();
+    }
+
+    function send(tab, obj) {
+      if (tab.ws && tab.ws.readyState === 1) tab.ws.send(JSON.stringify(obj));
+    }
+
+    function connect(tab) {
+      tab.status = 'connecting';
+      setStatus(tab);
+      const ws = new WebSocket(wsBase);
+      tab.ws = ws;
+      ws.binaryType = 'arraybuffer';
+      ws.onopen = () => {
+        if (tab.ws !== ws) return;
+        tab.status = 'connected';
+        setStatus(tab);
+        tab.fit.fit();
+        send(tab, { type: 'resize', cols: tab.term.cols, rows: tab.term.rows });
+        tab.term.focus();
+      };
+      ws.onmessage = (e) => {
+        if (tab.ws !== ws) return;
+        if (e.data instanceof ArrayBuffer) tab.term.write(new Uint8Array(e.data));
+        else tab.term.write(e.data);
+      };
+      ws.onclose = () => {
+        if (tab.ws !== ws) return;
+        tab.status = 'disconnected';
+        setStatus(tab);
+        tab.term.write('\r\n\x1b[31m[disconnected — ⚡ Restart to reconnect]\x1b[0m\r\n');
+      };
+      ws.onerror = () => { try { ws.close(); } catch (_) {} };
+    }
+
+    function createTab(title) {
+      const id = ++tabSeq;
+      const container = document.createElement('div');
+      container.className = 'absolute inset-0 hidden';
+      document.getElementById('terminal-container').appendChild(container);
+
+      const term = new Terminal({
+        theme: termTheme,
+        fontFamily: "'JetBrains Mono', monospace",
+        fontSize: window.innerWidth < 640 ? 12 : 14,
+        lineHeight: 1.25,
+        cursorBlink: true,
+        cursorStyle: 'block',
+        scrollback: 2000,
+        allowProposedApi: true
+      });
+      const fit = new FitAddon.FitAddon();
+      term.loadAddon(fit);
+
+      const tab = { id, title: title || 'shell', term, fit, container, ws: null, status: 'connecting' };
+      tabs.push(tab);
+
+      activateTab(id);       // unhide container before open/fit
+      term.open(container);
+      fit.fit();
+
+      term.onData(d => send(tab, { type: 'input', data: d }));
+      term.onResize(({ cols, rows }) => send(tab, { type: 'resize', cols, rows }));
+      term.onSelectionChange(() => {
+        if (term.hasSelection() && navigator.clipboard) navigator.clipboard.writeText(term.getSelection());
+      });
+
+      connect(tab);
+      term.focus();
+      return tab;
+    }
+
+    function closeTab(id) {
+      const idx = tabs.findIndex(t => t.id === id);
+      if (idx === -1) return;
+      const t = tabs[idx];
+      if (t.ws) { t.ws.onclose = null; try { t.ws.close(); } catch (_) {} }
+      t.term.dispose();
+      t.container.remove();
+      tabs.splice(idx, 1);
+      if (tabs.length === 0) { createTab(); return; }
+      if (activeId === id) activateTab(tabs[Math.min(idx, tabs.length - 1)].id);
+      else renderTabBar();
+    }
+
+    // Global resize
+    function refitActive() {
+      const t = activeTab();
+      if (t && t.status === 'connected') t.fit.fit();
+    }
+    window.addEventListener('resize', refitActive);
+    if (window.ResizeObserver) {
+      new ResizeObserver(refitActive).observe(document.getElementById('terminal-container'));
+    }
+
+    // Toolbar keys -> PTY input
+    const KEYS = {
+      esc: '\x1b', tab: '\t', ctrlc: '\x03', ctrld: '\x04',
+      up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C'
+    };
+    document.querySelectorAll('.key-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const k = btn.dataset.key;
+        const t = activeTab();
+        if (!t) return;
+        send(t, { type: 'input', data: KEYS[k] || k });
+        t.term.focus();
+      });
+    });
+
+    document.getElementById('clear-btn').addEventListener('click', () => {
+      const t = activeTab();
+      if (t) { t.term.clear(); t.term.focus(); }
+    });
+
+    document.getElementById('reconnect-btn').addEventListener('click', () => {
+      const t = activeTab();
+      if (!t) return;
+      if (t.ws) { t.ws.onclose = null; try { t.ws.close(); } catch (_) {} }
+      connect(t);
+      t.term.focus();
+    });
+
+    document.getElementById('newtab-btn').addEventListener('click', () => createTab());
+
+    createTab();
+  </script>
+</body>
+</html>
