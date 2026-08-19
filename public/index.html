@@ -50,6 +50,7 @@
       <div class="flex items-center gap-2">
         <button id="clear-btn" class="px-2 py-1 bg-zinc-800/60 hover:bg-zinc-700 rounded text-zinc-300 transition text-[11px]">Clear</button>
         <button id="reconnect-btn" class="px-2 py-1 bg-zinc-800/60 hover:bg-zinc-700 rounded text-zinc-300 transition text-[11px]">⚡ Restart</button>
+        <button id="logout-btn" class="px-2 py-1 bg-zinc-800/60 hover:bg-zinc-700 rounded text-zinc-300 transition text-[11px]">Logout</button>
       </div>
     </div>
 
@@ -282,6 +283,8 @@
       connect(t);
       t.term.focus();
     });
+
+    document.getElementById('logout-btn').addEventListener('click', () => { location.href = '/logout'; });
 
     document.getElementById('newtab-btn').addEventListener('click', () => createTab());
 

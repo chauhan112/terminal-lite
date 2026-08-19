@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>CloudShell — Sign in</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'JetBrains Mono', monospace;
+      background: #09090b; color: #f4f4f5;
+      min-height: 100dvh; display: flex; align-items: center; justify-content: center;
+      padding: 1rem;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .card {
+      width: 100%; max-width: 340px;
+      background: #18181b; border: 1px solid #27272a; border-radius: 10px;
+      padding: 2rem 1.75rem;
+    }
+    .brand { font-size: 14px; font-weight: 700; margin-bottom: 1.75rem; letter-spacing: .5px; color: #f4f4f5; }
+    .brand .prompt { color: #10b981; margin-right: .5ch; }
+    label { display: block; font-size: 11px; color: #a1a1aa; margin-bottom: .9rem; }
+    input {
+      width: 100%; margin-top: .35rem; padding: .55rem .7rem;
+      background: #09090b; border: 1px solid #3f3f46; border-radius: 6px;
+      color: #f4f4f5; font: inherit; font-size: 13px; outline: none;
+    }
+    input:focus { border-color: #10b981; }
+    button {
+      width: 100%; margin-top: .5rem; padding: .6rem;
+      background: #10b981; color: #09090b; border: none; border-radius: 6px;
+      font: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+      transition: background .15s;
+    }
+    button:hover { background: #34d399; }
+    button:disabled { opacity: .6; cursor: wait; }
+    .error { color: #ef4444; font-size: 12px; min-height: 1.2em; margin-top: .75rem; text-align: center; }
+  </style>
+</head>
+<body>
+  <form class="card" id="login-form" autocomplete="on">
+    <div class="brand"><span class="prompt">❯</span>cloudshell</div>
+    <label>username
+      <input id="username" name="username" autocomplete="username" autofocus required />
+    </label>
+    <label>password
+      <input id="password" name="password" type="password" autocomplete="current-password" required />
+    </label>
+    <div class="error" id="error"></div>
+    <button type="submit" id="submit-btn">sign in</button>
+  </form>
+  <script>
+    const form = document.getElementById('login-form');
+    const err = document.getElementById('error');
+    const btn = document.getElementById('submit-btn');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      err.textContent = '';
+      btn.disabled = true;
+      try {
+        const res = await fetch('/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('username').value,
+            password: document.getElementById('password').value
+          })
+        });
+        if (res.ok) { location.replace('/'); return; }
+        err.textContent = res.status === 401 ? 'invalid credentials' : 'login failed (' + res.status + ')';
+      } catch (_) {
+        err.textContent = 'network error';
+      }
+      btn.disabled = false;
+    });
+  </script>
+</body>
+</html>
