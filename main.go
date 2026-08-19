@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
@@ -17,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/creack/pty"
@@ -209,39 +211,143 @@ func serveLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusFound)
 }
 
-func serveWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Println("upgrade:", err)
-		return
-	}
-	defer conn.Close()
+// A session ties a PTY shell to a replay buffer so it survives WebSocket
+// disconnects (page refresh) and can be reattached. It is killed by the idle
+// timeout or an explicit "kill" message (tab close).
+const replayLimit = 128 * 1024
 
+var (
+	sessionsMu sync.Mutex
+	sessions   = map[string]*session{}
+)
+
+type session struct {
+	id    string
+	ptmx  *os.File
+	cmd   *exec.Cmd
+	mu    sync.Mutex
+	out   []byte
+	conn  *websocket.Conn
+	idle  *time.Timer
+	once  sync.Once
+}
+
+func randomID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func newSession() *session {
 	cmd := exec.Command(shell, shellArgs...)
 	cmd.Dir = workdir
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
 		log.Println("pty:", err)
+		return nil
+	}
+	s := &session{id: randomID(), ptmx: ptmx, cmd: cmd}
+	s.idle = time.AfterFunc(idleTimeout, s.expire)
+	sessionsMu.Lock()
+	sessions[s.id] = s
+	sessionsMu.Unlock()
+	return s
+}
+
+func (s *session) appendOut(b []byte) {
+	s.out = append(s.out, b...)
+	if len(s.out) > replayLimit {
+		n := copy(s.out, s.out[len(s.out)-replayLimit:])
+		s.out = s.out[:n]
+	}
+}
+
+func (s *session) expire() {
+	s.once.Do(func() {
+		sessionsMu.Lock()
+		delete(sessions, s.id)
+		sessionsMu.Unlock()
+		s.idle.Stop()
+		if s.cmd.Process != nil {
+			_ = s.cmd.Process.Kill()
+		}
+		_ = s.ptmx.Close()
+		_ = s.cmd.Wait()
+		s.mu.Lock()
+		c := s.conn
+		s.conn = nil
+		s.mu.Unlock()
+		if c != nil {
+			_ = c.Close()
+		}
+	})
+}
+
+// pump reads the PTY forever: buffers output and forwards it to the attached
+// connection, if any. Runs even while detached so long jobs keep the session
+// alive and their output is buffered for replay.
+func (s *session) pump() {
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := s.ptmx.Read(buf)
+		if n > 0 {
+			s.mu.Lock()
+			s.appendOut(buf[:n])
+			s.idle.Reset(idleTimeout)
+			if s.conn != nil {
+				_ = s.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+				if s.conn.WriteMessage(websocket.BinaryMessage, buf[:n]) != nil {
+					s.conn = nil
+				}
+			}
+			s.mu.Unlock()
+		}
+		if err != nil {
+			s.expire()
+			return
+		}
+	}
+}
+
+func serveWS(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println("upgrade:", err)
 		return
 	}
-	defer func() {
-		ptmx.Close()
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-		}
-		cmd.Wait()
-	}()
 
-	idleTimer := time.AfterFunc(idleTimeout, func() {
-		log.Println("ws: idle timeout, closing session")
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
+	var s *session
+	if id := r.URL.Query().Get("session"); id != "" {
+		sessionsMu.Lock()
+		s = sessions[id]
+		sessionsMu.Unlock()
+	}
+	if s == nil {
+		s = newSession()
+		if s == nil {
+			conn.Close()
+			return
 		}
-		_ = ptmx.Close()
-		_ = conn.Close()
-	})
-	defer idleTimer.Stop()
+		go s.pump()
+	}
+
+	// Attach: replay buffered output, then announce the session id.
+	s.mu.Lock()
+	if s.conn != nil {
+		old := s.conn
+		s.conn = nil
+		_ = old.Close()
+	}
+	s.conn = conn
+	s.idle.Reset(idleTimeout)
+	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	if len(s.out) > 0 {
+		_ = conn.WriteMessage(websocket.BinaryMessage, s.out)
+	}
+	_ = conn.WriteMessage(websocket.TextMessage,
+		[]byte(`{"type":"session","id":"`+s.id+`"}`))
+	s.mu.Unlock()
 
 	conn.SetReadLimit(1 << 20)
 	_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
@@ -250,33 +356,21 @@ func serveWS(w http.ResponseWriter, r *http.Request) {
 	})
 
 	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		buf := make([]byte, 32*1024)
-		for {
-			n, err := ptmx.Read(buf)
-			if n > 0 {
-				_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-				if conn.WriteMessage(websocket.BinaryMessage, buf[:n]) != nil {
-					return
-				}
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
-
+	defer close(done)
 	go func() {
 		t := time.NewTicker(25 * time.Second)
 		defer t.Stop()
 		for {
 			select {
 			case <-t.C:
-				_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-				if conn.WriteMessage(websocket.PingMessage, nil) != nil {
-					return
+				s.mu.Lock()
+				if s.conn == conn {
+					_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+					if conn.WriteMessage(websocket.PingMessage, nil) != nil {
+						s.conn = nil
+					}
 				}
+				s.mu.Unlock()
 			case <-done:
 				return
 			}
@@ -288,7 +382,9 @@ func serveWS(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			break
 		}
-		idleTimer.Reset(idleTimeout)
+		s.mu.Lock()
+		s.idle.Reset(idleTimeout)
+		s.mu.Unlock()
 		var msg clientMessage
 		if json.Unmarshal(raw, &msg) != nil {
 			continue
@@ -296,22 +392,27 @@ func serveWS(w http.ResponseWriter, r *http.Request) {
 		switch msg.Type {
 		case "input":
 			if msg.Data != "" {
-				_, _ = ptmx.Write([]byte(msg.Data))
+				_, _ = s.ptmx.Write([]byte(msg.Data))
 			}
 		case "resize":
 			if msg.Cols > 0 && msg.Rows > 0 {
-				_ = pty.Setsize(ptmx, &pty.Winsize{
+				_ = pty.Setsize(s.ptmx, &pty.Winsize{
 					Cols: uint16(msg.Cols),
 					Rows: uint16(msg.Rows),
 				})
 			}
-		}
-		if err != nil {
-			break
+		case "kill":
+			s.expire()
 		}
 	}
+
+	// Detach: keep the session running for reattach (refresh) unless killed.
+	s.mu.Lock()
+	if s.conn == conn {
+		s.conn = nil
+	}
+	s.mu.Unlock()
 	conn.Close()
-	<-done
 }
 
 var shellArgs []string

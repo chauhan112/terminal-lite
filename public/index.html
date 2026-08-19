@@ -96,8 +96,22 @@
   <script>
     const params = new URLSearchParams(location.search);
     const token = params.get('token') || '';
-    const wsBase = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws' +
-                   (token ? '?token=' + encodeURIComponent(token) : '');
+    function wsUrl(tab) {
+      const p = new URLSearchParams();
+      if (token) p.set('token', token);
+      if (tab.sessionId) p.set('session', tab.sessionId);
+      const qs = p.toString();
+      return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws' + (qs ? '?' + qs : '');
+    }
+
+    // Persist tab->session mapping so a page refresh reattaches to the same
+    // shells instead of spawning new ones.
+    function saveSessions() {
+      try {
+        sessionStorage.setItem('tl-sessions',
+          JSON.stringify(tabs.filter(t => t.sessionId).map(t => ({ id: t.sessionId, title: t.title }))));
+      } catch (_) {}
+    }
 
     document.getElementById('host-label').textContent = location.hostname || 'localhost';
     document.getElementById('proto-label').textContent = location.host + (location.protocol === 'https:' ? ' (TLS)' : '');
@@ -174,7 +188,7 @@
     function connect(tab) {
       tab.status = 'connecting';
       setStatus(tab);
-      const ws = new WebSocket(wsBase);
+      const ws = new WebSocket(wsUrl(tab));
       tab.ws = ws;
       ws.binaryType = 'arraybuffer';
       ws.onopen = () => {
@@ -188,7 +202,13 @@
       ws.onmessage = (e) => {
         if (tab.ws !== ws) return;
         if (e.data instanceof ArrayBuffer) tab.term.write(new Uint8Array(e.data));
-        else tab.term.write(e.data);
+        else {
+          // Text frames are control messages (session id assignment)
+          try {
+            const c = JSON.parse(e.data);
+            if (c.type === 'session' && c.id) { tab.sessionId = c.id; saveSessions(); }
+          } catch (_) {}
+        }
       };
       ws.onclose = () => {
         if (tab.ws !== ws) return;
@@ -199,7 +219,7 @@
       ws.onerror = () => { try { ws.close(); } catch (_) {} };
     }
 
-    function createTab(title) {
+    function createTab(title, sessionId) {
       const id = ++tabSeq;
       const container = document.createElement('div');
       container.className = 'absolute inset-0 hidden';
@@ -218,7 +238,7 @@
       const fit = new FitAddon.FitAddon();
       term.loadAddon(fit);
 
-      const tab = { id, title: title || 'shell', term, fit, container, ws: null, status: 'connecting' };
+      const tab = { id, title: title || 'shell', term, fit, container, ws: null, sessionId: sessionId || null, status: 'connecting' };
       tabs.push(tab);
 
       activateTab(id);       // unhide container before open/fit
@@ -240,10 +260,15 @@
       const idx = tabs.findIndex(t => t.id === id);
       if (idx === -1) return;
       const t = tabs[idx];
+      // Explicit close: tell the server to kill the session
+      if (t.ws && t.ws.readyState === 1) {
+        try { t.ws.send(JSON.stringify({ type: 'kill' })); } catch (_) {}
+      }
       if (t.ws) { t.ws.onclose = null; try { t.ws.close(); } catch (_) {} }
       t.term.dispose();
       t.container.remove();
       tabs.splice(idx, 1);
+      saveSessions();
       if (tabs.length === 0) { createTab(); return; }
       if (activeId === id) activateTab(tabs[Math.min(idx, tabs.length - 1)].id);
       else renderTabBar();
@@ -380,7 +405,14 @@
 
     document.getElementById('newtab-btn').addEventListener('click', () => createTab());
 
-    createTab();
+    // Reattach to sessions from before a refresh (same browser tab only)
+    let saved = [];
+    try { saved = JSON.parse(sessionStorage.getItem('tl-sessions') || '[]'); } catch (_) {}
+    if (Array.isArray(saved) && saved.length) {
+      for (const s of saved) createTab(s.title, s.id);
+    } else {
+      createTab();
+    }
   </script>
 </body>
 </html>
