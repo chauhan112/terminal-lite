@@ -74,6 +74,8 @@
       <button data-key="tab" class="key-btn px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 rounded text-zinc-300 font-bold">TAB</button>
       <button data-key="ctrlc" class="key-btn px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 rounded text-amber-400 font-bold">CTRL+C</button>
       <button data-key="ctrld" class="key-btn px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 rounded text-amber-400 font-bold">CTRL+D</button>
+      <button data-key="vimquit" class="key-btn px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 rounded text-amber-400 font-bold">:q!</button>
+      <button data-key="nanoquit" class="key-btn px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 rounded text-amber-400 font-bold">NANO-X</button>
       <button data-key="|" class="key-btn px-2.5 py-1 bg-zinc-800/60 hover:bg-zinc-700 rounded text-zinc-400">|</button>
       <button data-key="~" class="key-btn px-2.5 py-1 bg-zinc-800/60 hover:bg-zinc-700 rounded text-zinc-400">~</button>
       <button data-key="/" class="key-btn px-2.5 py-1 bg-zinc-800/60 hover:bg-zinc-700 rounded text-zinc-400">/</button>
@@ -259,7 +261,8 @@
     // Toolbar keys -> PTY input
     const KEYS = {
       esc: '\x1b', tab: '\t', ctrlc: '\x03', ctrld: '\x04',
-      up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C'
+      up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C',
+      vimquit: '\x1b:qa!\r', nanoquit: '\x18n'
     };
     document.querySelectorAll('.key-btn').forEach(btn => {
       btn.addEventListener('click', () => {
