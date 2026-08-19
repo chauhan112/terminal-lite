@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -28,6 +29,7 @@ var embedded embed.FS
 const (
 	sessionCookieName = "terminal_session"
 	sessionTTL        = 30 * 24 * time.Hour
+	idleTimeout       = 5 * time.Minute
 )
 
 var (
@@ -215,7 +217,7 @@ func serveWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	cmd := exec.Command(shell)
+	cmd := exec.Command(shell, shellArgs...)
 	cmd.Dir = workdir
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 	ptmx, err := pty.Start(cmd)
@@ -230,6 +232,16 @@ func serveWS(w http.ResponseWriter, r *http.Request) {
 		}
 		cmd.Wait()
 	}()
+
+	idleTimer := time.AfterFunc(idleTimeout, func() {
+		log.Println("ws: idle timeout, closing session")
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = ptmx.Close()
+		_ = conn.Close()
+	})
+	defer idleTimer.Stop()
 
 	conn.SetReadLimit(1 << 20)
 	_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
@@ -276,6 +288,7 @@ func serveWS(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			break
 		}
+		idleTimer.Reset(idleTimeout)
 		var msg clientMessage
 		if json.Unmarshal(raw, &msg) != nil {
 			continue
@@ -299,6 +312,23 @@ func serveWS(w http.ResponseWriter, r *http.Request) {
 	}
 	conn.Close()
 	<-done
+}
+
+var shellArgs []string
+
+func bashRcfile() []string {
+	if filepath.Base(shell) != "bash" {
+		return nil
+	}
+	rc := filepath.Join(os.TempDir(), "terminal-lite-"+strconv.Itoa(os.Getuid())+".bashrc")
+	content := "[ -r /etc/bash.bashrc ] && . /etc/bash.bashrc\n" +
+		"[ -r \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\"\n" +
+		"PS1='\\[\\033[1;32m\\]\\u@\\h\\[\\033[0m\\]:\\[\\033[1;34m\\]\\w\\[\\033[0m\\]\\n\\$ '\n"
+	if err := os.WriteFile(rc, []byte(content), 0o600); err != nil {
+		log.Println("rcfile:", err)
+		return nil
+	}
+	return []string{"--rcfile", rc}
 }
 
 func authMode() string {
@@ -342,6 +372,10 @@ func main() {
 		log.Fatal("LOGIN_USER and LOGIN_PASS must be set together")
 	}
 	sessionSecret = deriveSessionSecret()
+
+	// Two-line prompt (user@host, then $) for bash sessions. Via --rcfile so
+	// it wins over ~/.bashrc, which would otherwise reset PS1.
+	shellArgs = bashRcfile()
 
 	if *addr == "" {
 		if p := os.Getenv("PORT"); p != "" {

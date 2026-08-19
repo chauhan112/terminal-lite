@@ -71,8 +71,9 @@
        style="padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px));">
     <div class="flex items-center gap-1.5">
       <button data-key="esc" class="key-btn px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 rounded text-zinc-300 font-bold">ESC</button>
+      <button id="mod-ctrl" class="mod-btn px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 rounded text-zinc-300 font-bold transition">CTRL</button>
+      <button id="mod-shift" class="mod-btn px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 rounded text-zinc-300 font-bold transition">SHIFT</button>
       <button data-key="tab" class="key-btn px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 rounded text-zinc-300 font-bold">TAB</button>
-      <button data-key="ctrlc" class="key-btn px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 rounded text-amber-400 font-bold">CTRL+C</button>
       <button data-key="ctrld" class="key-btn px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 rounded text-amber-400 font-bold">CTRL+D</button>
       <button data-key="vimquit" class="key-btn px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 rounded text-amber-400 font-bold">:q!</button>
       <button data-key="nanoquit" class="key-btn px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 rounded text-amber-400 font-bold">NANO-X</button>
@@ -224,7 +225,7 @@
       term.open(container);
       fit.fit();
 
-      term.onData(d => send(tab, { type: 'input', data: d }));
+      term.onData(d => handleData(tab, d));
       term.onResize(({ cols, rows }) => send(tab, { type: 'resize', cols, rows }));
       term.onSelectionChange(() => {
         if (term.hasSelection() && navigator.clipboard) navigator.clipboard.writeText(term.getSelection());
@@ -258,18 +259,106 @@
       new ResizeObserver(refitActive).observe(document.getElementById('terminal-container'));
     }
 
+    // Close all terminal sessions when the page is closed or navigated away
+    window.addEventListener('pagehide', () => {
+      for (const t of tabs) {
+        if (t.ws) { t.ws.onclose = null; try { t.ws.close(); } catch (_) {} }
+      }
+    });
+
+    // Desktop-terminal copy/paste: Ctrl+Shift+C/V, and Ctrl+C copies when text
+    // is selected (SIGINT only when nothing is selected). Captured in the
+    // capture phase + preventDefault so Firefox's devtools shortcut
+    // (Ctrl+Shift+C) does not fire.
+    function copySelection(t) {
+      const text = t.term.getSelection();
+      if (text && navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
+      t.term.clearSelection();
+    }
+    window.addEventListener('keydown', (e) => {
+      if (!e.ctrlKey || e.altKey || e.metaKey) return;
+      const t = activeTab();
+      if (!t) return;
+      const key = e.key.toLowerCase();
+      if (key === 'c' && (e.shiftKey || t.term.hasSelection())) {
+        copySelection(t);
+        e.preventDefault();
+        e.stopPropagation();
+      } else if (e.shiftKey && key === 'v' && navigator.clipboard) {
+        navigator.clipboard.readText()
+          .then(text => { if (text) send(t, { type: 'input', data: text }); })
+          .catch(() => {});
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, true);
+
     // Toolbar keys -> PTY input
     const KEYS = {
-      esc: '\x1b', tab: '\t', ctrlc: '\x03', ctrld: '\x04',
-      up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C',
+      esc: '\x1b', tab: '\t', ctrld: '\x04',
       vimquit: '\x1b:qa!\r', nanoquit: '\x18n'
     };
+
+    // Sticky modifiers (one-shot, like mobile keyboards): toggle CTRL/SHIFT,
+    // then tap a letter / arrow. Auto-release after the next key.
+    const mods = { ctrl: false, shift: false };
+    const CTRL_CHARS = {
+      a:'\x01', b:'\x02', c:'\x03', d:'\x04', e:'\x05', f:'\x06', h:'\x08',
+      k:'\x0b', l:'\x0c', n:'\x0e', p:'\x10', r:'\x12', t:'\x14', u:'\x15',
+      w:'\x17', x:'\x18', y:'\x19', z:'\x1a'
+    };
+
+    function updateModBtns() {
+      for (const [id, on] of [['mod-ctrl', mods.ctrl], ['mod-shift', mods.shift]]) {
+        document.getElementById(id).className = 'mod-btn px-2.5 py-1 rounded font-bold transition ' +
+          (on ? 'bg-amber-500 text-zinc-950' : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300');
+      }
+    }
+    function clearMods() { mods.ctrl = false; mods.shift = false; updateModBtns(); }
+
+    document.getElementById('mod-ctrl').addEventListener('click', () => {
+      mods.ctrl = !mods.ctrl;
+      updateModBtns();
+      const t = activeTab();
+      if (t) t.term.focus();
+    });
+    document.getElementById('mod-shift').addEventListener('click', () => {
+      mods.shift = !mods.shift;
+      updateModBtns();
+      const t = activeTab();
+      if (t) t.term.focus();
+    });
+
+    // Terminal input with modifier application
+    function handleData(tab, d) {
+      if (mods.ctrl && d.length === 1) {
+        const out = CTRL_CHARS[d.toLowerCase()];
+        if (out) { clearMods(); send(tab, { type: 'input', data: out }); return; }
+      }
+      if (mods.ctrl || mods.shift) clearMods();
+      send(tab, { type: 'input', data: d });
+    }
+
+    function arrowSeq(base) {
+      let m = 1;
+      if (mods.shift) m += 1;
+      if (mods.ctrl) m += 4;
+      clearMods();
+      return m === 1 ? '\x1b[' + base : '\x1b[1;' + m + base;
+    }
+
     document.querySelectorAll('.key-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const k = btn.dataset.key;
         const t = activeTab();
         if (!t) return;
-        send(t, { type: 'input', data: KEYS[k] || k });
+        let data;
+        if (k === 'up') data = arrowSeq('A');
+        else if (k === 'down') data = arrowSeq('B');
+        else if (k === 'left') data = arrowSeq('D');
+        else if (k === 'right') data = arrowSeq('C');
+        else { data = KEYS[k] || k; clearMods(); }
+        send(t, { type: 'input', data });
         t.term.focus();
       });
     });
