@@ -5,8 +5,8 @@ After=network.target
 [Service]
 User=raja
 Group=raja
-EnvironmentFile=/home/raja/timeline/2026/q3/terminal/.env
-ExecStart=/home/raja/timeline/2026/q3/terminal/terminal -addr 127.0.0.1:${PORT}
+EnvironmentFile=/home/raja/timeline/2026/q3/terminal-lite/.env
+ExecStart=/home/raja/timeline/2026/q3/terminal-lite/terminal -addr 127.0.0.1:${PORT}
 Restart=on-failure
 RestartSec=2
 

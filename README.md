@@ -19,7 +19,7 @@ Login sets an HttpOnly cookie valid for 30 days.
 ## Rebuild + restart (one-liner)
 
 ```bash
-cd /home/raja/timeline/2026/q3/terminal && go build -o terminal . && sudo cp app-terminal.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart app-terminal && systemctl --no-pager status app-terminal | head -5
+go build -o terminal . && sudo cp app-terminal.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart app-terminal && systemctl --no-pager status app-terminal | head -5
 ```
 
 ## Logs
